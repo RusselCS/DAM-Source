@@ -1,0 +1,247 @@
+package com.duelimpact.services;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import com.duelimpact.entities.AcsCompiler;
+
+import me.michael4797.util.ArchiveEntry;
+import me.michael4797.util.EntrySource;
+import me.michael4797.util.ZipArchive;
+
+public class FileWatcher {
+	
+	private static Map<File, Long> fileMap;
+	private static ZipArchive zip;
+	
+	static {
+		fileMap = new HashMap<>();
+	}
+	
+	public static void observeFiles(String sourceDir, String destDir) {
+		
+		try {
+			File destFile = new File(destDir);
+			if(destFile.exists()) {
+				destFile.delete();
+			}
+			zip = new ZipArchive(destFile);
+			File source = new File(sourceDir);
+
+			while (true) {
+				Collection<File> updates = updateMap(source, fileMap);
+				updates.addAll(checkDeletions(fileMap));
+				if (updates.size() > 0) {
+					String timeStamp = new SimpleDateFormat("HH:mm:ss").format(Calendar.getInstance().getTime());
+					System.out.printf("\n%s - Updating archive %s...\n", timeStamp, destFile.getName());
+					checkAcs(updates);
+					
+					zip.removeAll(findEntries(updates));
+					zip.addAll(findSources(updates));
+				}
+
+				Thread.sleep(2000);
+			}
+		} catch (Exception e) {
+			System.err.println("Exception occurred during processing of file changes");
+			e.printStackTrace();
+		}
+	}
+	
+	private static Collection<ArchiveEntry> findEntries(Collection<File> files) {
+		Collection<ArchiveEntry> result = new ArrayDeque<>();
+		
+		for(File file : files) {
+			String path = file.getPath().replaceAll("\\\\", "/");
+			path = path.substring(path.indexOf("/")+1, path.length());
+			if(zip.containsEntry(path)) {
+				result.add(zip.getEntry(path));
+			}
+		}
+		
+		return result;
+	}
+	
+	private static Collection<EntrySource> findSources(Collection<File> files) {
+		Collection<EntrySource> result = new ArrayDeque<>();
+		
+		for(File file : files) {
+			if(!file.isDirectory() && file.exists()) {
+				String path = file.getPath().replaceAll("\\\\", "/");
+				path = path.substring(path.indexOf("/")+1, path.length());
+				result.add(new EntrySource(path, file));
+			}
+		}
+		
+		return result;
+	}
+	
+	private static Collection<File> updateMap(File directory, Map<File, Long> map) {
+		Collection<File> result = new ArrayDeque<>();
+
+		for (File file : directory.listFiles()) {
+			if (file.isDirectory()) {
+				result.addAll(updateMap(file, map));
+			}
+			if (map.get(file) == null || map.get(file) != file.lastModified()) {
+				map.put(file, file.lastModified());
+				result.add(file);
+			}
+		}
+		
+		return result;
+	}
+	
+	private static Collection<File> checkDeletions(Map<File, Long> map) {
+		Collection<File> result = new ArrayDeque<>();
+		
+		Collection<File> mapRemoval = new ArrayDeque<>();
+		for(File key : map.keySet()) {
+			if(!key.exists()) {
+				System.out.println(key.getName() + " does not exist!!");
+				mapRemoval.add(key);
+				result.add(key);
+			}
+		}
+		
+		for(File key : mapRemoval) {
+			map.remove(key);
+		}
+		
+		return result;
+	}
+	
+	public static int countDirs(File directory, int start) {
+		for (File file : directory.listFiles()) {
+			if (file.isDirectory()) {
+				start += countDirs(file, start);
+			}
+		}
+		return start;
+	}
+	
+	public static void compileAcs(String sourceDir) {
+		try
+		{
+			File source = new File(sourceDir);
+			Collection<File> updates = updateMap(source, fileMap);
+			checkAcs(updates);
+		} catch (Exception e) {
+			System.err.println("Exception occurred during processing of ACS files.\n");
+			e.printStackTrace();
+		}
+	}
+	
+	private static void checkAcs(Collection<File> updates) throws IOException, InterruptedException {
+		Collection<File> acsUps = new ArrayDeque<>();
+		for(File file : updates) {
+			if( StringService.endsWithAny(file.getName(), PropertiesService.getACSFileTypes()) &&
+				!StringService.contains(PropertiesService.getACSExclusions(), file.getName())) {
+				
+				AcsCompiler acs = new AcsCompiler();
+				System.out.print("Compiling " + file.getName() + "...");
+				acs.compileAcs(file.getPath().replaceAll("\\\\", "/"));
+				System.out.println(acs.getErrorMessage());
+				
+				if(acs.getExitValue() == 0) {
+					File acsUp = new File(acs.getOutputFile());
+					if(!updates.contains(acsUp)) {
+						acsUps.add(acsUp);
+					}
+					fileMap.put(acsUp, acsUp.lastModified());
+				}
+				
+				File dir = new File(file.getParent());
+				fileMap.put(dir, dir.lastModified());
+			}
+		}
+		if(acsUps.size() > 0) {
+			updates.addAll(acsUps);
+		}
+	}
+	
+
+	private static int buildProgress;
+	private static int buildMax;
+	
+	public static void compileArchive(String sourceDir, String destDir) {
+		try {
+			System.out.println("\nCompiling ACS source files...");
+			File destFile = new File(destDir);
+			if(destFile.exists()) {
+				destFile.delete();
+			}
+			File source = new File(sourceDir);
+			
+			compileAcs(sourceDir);
+			
+			System.out.println(StringService.lineDelimiter('-'));
+			
+			Thread.sleep(500);
+			fileMap.clear();
+			System.out.printf("Compiling archive to %s...\n", destDir);
+			
+			buildMax = updateMap(source, fileMap).size();
+			ZipPrinter.setMaxFiles(buildMax);
+			ZipPrinter.updateSubject(0);
+			
+			pack(Paths.get(sourceDir), Paths.get(destDir));
+			ZipPrinter.updateSubject(buildMax);
+			System.out.println(StringService.lineDelimiter('-'));
+			
+			System.out.println("Build completed successfully.\n\n");
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+	// CODE BY JJST ON STACK OVERFLOW
+	//
+	
+	public static void pack(final Path folder, final Path zipFilePath) throws IOException {
+		buildProgress = 0;
+	    try (
+	            FileOutputStream fos = new FileOutputStream(zipFilePath.toFile());
+	            ZipOutputStream zos = new ZipOutputStream(fos)
+	        ) {
+	        Files.walkFileTree(folder, new SimpleFileVisitor<Path>() {
+	            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+	            	String fileName = folder.relativize(file).toString().replace("\\", "/");
+	            	buildProgress++;
+	            	ZipPrinter.updateSubject(buildProgress);
+	    			ZipPrinter.setFileName(fileName);
+	                zos.putNextEntry(new ZipEntry(fileName));
+	                Files.copy(file, zos);
+	                zos.closeEntry();
+	                return FileVisitResult.CONTINUE;
+	            }
+
+	            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+	            	String fileName = folder.relativize(dir).toString() + "/";
+	            	buildProgress++;
+	            	ZipPrinter.updateSubject(buildProgress);
+	    			ZipPrinter.setFileName(fileName);
+	                zos.putNextEntry(new ZipEntry(fileName));
+	                zos.closeEntry();
+	                return FileVisitResult.CONTINUE;
+	            }
+	        });
+	    }
+	}
+	
+}
