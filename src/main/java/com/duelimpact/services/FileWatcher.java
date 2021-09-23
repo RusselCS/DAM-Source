@@ -11,6 +11,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collection;
 import java.util.HashMap;
@@ -28,9 +29,16 @@ public class FileWatcher {
 	
 	private static Map<File, Long> fileMap;
 	private static ZipArchive zip;
+	private static Collection<Path> acsPaths;
+	
+	enum ACSCommand {
+		ACSC_COPY,
+		ACSC_DELETE
+	}
 	
 	static {
 		fileMap = new HashMap<>();
+		acsPaths = new ArrayList<>();
 	}
 	
 	public static void observeFiles(String sourceDir, String destDir) {
@@ -147,35 +155,65 @@ public class FileWatcher {
 		}
 	}
 	
-	private static void checkAcs(Collection<File> updates) throws IOException, InterruptedException {
-		Collection<File> acsUps = new ArrayDeque<>();
-		for(File file : updates) {
-			if( StringService.endsWithAny(file.getName(), PropertiesService.getACSFileTypes()) &&
-				!StringService.contains(PropertiesService.getACSExclusions(), file.getName())) {
-				
-				AcsCompiler acs = new AcsCompiler();
-				System.out.print("Compiling " + file.getName() + "...");
-				acs.compileAcs(file.getPath().replaceAll("\\\\", "/"));
-				System.out.println(acs.getErrorMessage());
-				
-				if(acs.getExitValue() == 0) {
-					File acsUp = new File(acs.getOutputFile());
-					if(!updates.contains(acsUp)) {
-						acsUps.add(acsUp);
-					}
-					fileMap.put(acsUp, acsUp.lastModified());
+	public static void updateAcsPaths(ACSCommand cmd, Collection<File> updates) throws IOException {
+		if(cmd == ACSCommand.ACSC_COPY) {
+			acsPaths.clear();
+			for(File file : updates) {
+				if( StringService.endsWithAny(file.getName(), PropertiesService.getACSFileTypes()) ) {
+					Path outPath = Paths.get(PropertiesService.getAccLocation(), file.getName());
+					acsPaths.add(outPath);
+					Files.copy(file.getAbsoluteFile().toPath(), outPath);
 				}
-				
-				File dir = new File(file.getParent());
-				fileMap.put(dir, dir.lastModified());
+			}
+		} else if (cmd == ACSCommand.ACSC_DELETE) {
+			for(Path outPath : acsPaths) {
+				Files.delete(outPath);
 			}
 		}
+	}
+	
+	private static void checkAcs(Collection<File> updates) throws IOException, InterruptedException {
+		
+		boolean compilingACS = false;
+		
+		Collection<File> acsUps = new ArrayDeque<>();
+		for(File file : updates) {
+			if( StringService.endsWithAny(file.getName(), PropertiesService.getACSFileTypes()) ) {
+				if(!compilingACS) {
+					updateAcsPaths(ACSCommand.ACSC_COPY, fileMap.keySet());
+					compilingACS = true;
+				}
+				
+				if(!StringService.contains(PropertiesService.getACSExclusions(), file.getName())) {
+					
+					AcsCompiler acs = new AcsCompiler();
+					System.out.print("Compiling " + file.getName() + "...");
+					acs.compileAcs(file.getPath().replaceAll("\\\\", "/"));
+					System.out.println(acs.getErrorMessage());
+					
+					if(acs.getExitValue() == 0) {
+						File acsUp = new File(acs.getOutputFile());
+						if(!updates.contains(acsUp)) {
+							acsUps.add(acsUp);
+						}
+						fileMap.put(acsUp, acsUp.lastModified());
+					}
+					
+					File dir = new File(file.getParent());
+					fileMap.put(dir, dir.lastModified());
+				}
+			}
+		}
+		
+		if(compilingACS) {
+			updateAcsPaths(ACSCommand.ACSC_DELETE, null);
+		}
+		
 		if(acsUps.size() > 0) {
 			updates.addAll(acsUps);
 		}
 	}
 	
-
 	private static int buildProgress;
 	private static int buildMax;
 	

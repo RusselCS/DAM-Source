@@ -90,4 +90,8 @@ public class StringService {
 		
 		return bdr.toString();
 	}
+	
+	public static boolean stringIs(String[] args, int index, String search) {
+		return args.length > index && args[index].equalsIgnoreCase(search);
+	}
 }
