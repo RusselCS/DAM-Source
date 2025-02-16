@@ -23,7 +23,7 @@ public class DPMLauncher {
 		} else if(StringService.stringIs(args, 0, "acc")) {
 			ZipPrinter.subscribe();
 			System.out.printf("Compiling ACS in %s...\n", PropertiesService.getArchive().getSource());
-			FileWatcher.compileAcs(PropertiesService.getArchive().getSource());
+			FileWatcher.compileAndCleanAcs(PropertiesService.getArchive().getSource());
 		}
 		
 		else {

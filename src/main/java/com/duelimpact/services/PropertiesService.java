@@ -11,6 +11,8 @@ public class PropertiesService {
 	private static String accLocation;
 	private static String acsExtensions[];
 	private static String acsExclusions[];
+	private static boolean logAcs;
+	private static boolean killOnWarn;
 	
 	static {
 		archive = new Archive();
@@ -28,6 +30,10 @@ public class PropertiesService {
 					new String[] {".acs"}
 			);
 			acsExclusions = StringService.arrFromString(prop.getProperty("acc.exclusions"), "\\|");
+			logAcs = Boolean.parseBoolean(prop.getProperty("acc.logacs"));
+			
+			killOnWarn = Boolean.parseBoolean(prop.getProperty("archive.build.killonwarn"));
+			
 		} catch (Exception e) {
 			System.err.println("Could not load archive properties. Please ensure archive.properties is in the same file as dam.jar.");
 			e.printStackTrace();
@@ -50,5 +56,13 @@ public class PropertiesService {
 	
 	public static String[] getACSExclusions() {
 		return acsExclusions;
+	}
+	
+	public static boolean doLogAcs() {
+		return logAcs;
+	}
+	
+	public static boolean killOnWarn() {
+		return killOnWarn;
 	}
 }
